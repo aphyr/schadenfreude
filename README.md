@@ -8,6 +8,10 @@ Schadenfreude can record time series measurements, produce latency and
 throughput plots over time, and compare multiple versions of a git repository
 to understand how your changes affect performance.
 
+## Installing
+
+(https://clojars.org/schadenfreude)
+
 ## Runs
 
 A Run is a single benchmark, represented as a map:
