@@ -1,4 +1,4 @@
-(defproject schadenfreude "0.1.0"
+(defproject schadenfreude "0.1.1-SNAPSHOT"
   :description "A benchmarking tool."
   :url "http://github.com/aphyr/schadenfreude"
   :license {:name "Eclipse Public License"
