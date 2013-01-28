@@ -34,13 +34,13 @@
   [counters total]
   (future
     (loop []
-      (Thread/sleep 1000)
       (let [i (reduce (fn [sum c] (+ sum @c)) 0 counters)]
+        (render-progress
+          {:width 80
+           :i i
+           :total total})
         (when (< i total)
-          (render-progress
-            {:width 80
-             :i i
-             :total total})
+          (Thread/sleep 1000)
           (recur))))
     (print "\n")))
 
@@ -90,7 +90,8 @@
                                            (assoc run :n n)
                                            before-val
                                            (counters thread-id))]
-                                (swap! tapes conj tape))))
+                                (swap! tapes conj tape))
+                             "schadenfreude-record"))
                   (divide-evenly n thread-count))]
     ; Run threads
     (doseq [t workers] (.start t))
