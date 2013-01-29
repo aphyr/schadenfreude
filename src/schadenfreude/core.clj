@@ -51,8 +51,8 @@
         n         (get run :n 1)
         progress  (max 1 (int (/ n 100)))
         f         (:f run)
-        times     (long-array (/ n sample))
-        latencies (long-array (/ n sample))]
+        times     (long-array (int (/ n sample)))
+        latencies (long-array (int (/ n sample)))]
     (try
       (dotimes [i n]
         (let [j (int (/ i sample))]
