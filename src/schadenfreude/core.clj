@@ -47,16 +47,18 @@
 (defn record-thread
   "Returns a pair of arrays of times and latencies for a run, single-threaded."
   [run before-val counter]
-  (let [n         (get run :n 1)
-        progress  (min 1 (int (/ n 100)))
+  (let [sample    (get run :sample 1)
+        n         (get run :n 1)
+        progress  (max 1 (int (/ n 100)))
         f         (:f run)
-        times     (long-array n)
-        latencies (long-array n)]
+        times     (long-array (/ n sample))
+        latencies (long-array (/ n sample))]
     (try
       (dotimes [i n]
-        (aset-long times i (System/nanoTime))
-        (f before-val)
-        (aset-long latencies i (- (System/nanoTime) (aget times i)))
+        (let [j (int (/ i sample))]
+          (aset-long times j (System/nanoTime))
+          (f before-val)
+          (aset-long latencies j (- (System/nanoTime) (aget times j))))
 
         ; Update counter
         (when (zero? (mod i progress))
@@ -147,6 +149,7 @@
   ([run opts]
    (assert run)
    (let [ds        ($order :time :asc (:record run))
+         sample    (:sample run)
          times     ($ :time ds)
          _         (assert (< 1 (count times)))
          t1        (first times)
@@ -158,7 +161,7 @@
          bins      (partition-by #(quot % bin-dt) times)
          points    (drop-last
                      (map (fn [t bin] 
-                            [t (/ (count bin) bin-dt)])
+                            [t (* sample (/ (count bin) bin-dt))])
                           bin-times bins))]
      (dataset [:time :throughput] points))))
 
