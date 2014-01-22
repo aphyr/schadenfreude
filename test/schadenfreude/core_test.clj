@@ -1,4 +1,6 @@
 (ns schadenfreude.core-test
+  (:import java.util.concurrent.atomic.AtomicLong)
+  (:require [incanter.core :as incanter])
   (:use clojure.test
         incanter.core
         schadenfreude.core))
@@ -52,22 +54,56 @@
 
 
 (deftest record-test
-         (letfn [(rec [n threads]
-                      (let [before (atom 0)
-                            x      (atom 0)
-                            after  (atom 0)
-                            run (record {:n n
-                                        :threads threads 
-                                        :before #(swap! before inc)
-                                        :after  #(swap! after  inc)
-                                        :f      #(swap! x      inc)})]
-                        (is (= (col-names (:record run)) [:time :latency]))
-                        (is (= n (count (:rows (:record run)))))
-                        (is (= n @x))
-                        (is (= 1 @before))
-                        (is (= 1 @after))))]
-           (rec 0 0)
-           (rec 1 1)
-           (rec 10 1)
-           (rec 10 2)
-           (rec 43 5)))
+  (letfn [(rec [n threads]
+            (let [before (atom nil)
+                  x      (atom 0)
+                  after  (atom nil)
+                  run    (record
+                           {:n n
+                            :threads threads
+                            :before (fn []  (reset! before (System/nanoTime)))
+                            :after  (fn [_] (reset! after (System/nanoTime)))
+                            :f      (fn [_] (swap! x     inc))})
+                  dt      (* time-scale (- @after @before))]
+              (is (= (col-names (:record run))
+                     [:time
+                      :throughput
+                      :latency-0
+                      :latency-0.5
+                      :latency-0.95
+                      :latency-0.99
+                      :latency-0.999
+                      :latency-1]))
+              (is (pos? @before))
+              (is (pos? @after))
+              (is (= (count (:rows (:record run)))
+                     (long (Math/ceil (/ dt sample-interval)))))
+              (is (= n @x))))]
+    (rec 1 1)
+    (rec 10 1)
+    (rec 10 2)
+    (rec 43 5)
+    (rec 10000000 4)))
+
+; Compare j.u.c. atomiclong to swap!
+(deftest plot-test
+  (let [n               10000000
+        threads         4
+        juc  (record {:n       n
+                      :threads threads
+                      :before  #(AtomicLong. 0)
+                      :f       (fn [^AtomicLong a] (.incrementAndGet a))})
+        swap (record {:n       n
+                      :threads threads
+                      :before  #(atom 0)
+                      :f       #(swap! % inc)})]
+    ; Throughput
+    (incanter/save (throughput-plot [juc swap])
+                   "throughput.png"
+                   :width 1024)
+
+    ; Latencies
+    (doseq [l [0 0.5 0.95 0.99 0.999 1]]
+      (incanter/save (latency-plot l [juc swap])
+                     (str "latency-" l ".png")
+                     :width 1024))))

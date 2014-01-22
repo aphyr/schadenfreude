@@ -8,6 +8,8 @@
     :after   ; A function to call at shutdown.
     :n       ; How many times to evaluate f
     :threads ; Number of threads}"
+  (:require [interval-metrics.core :as metrics]
+            [interval-metrics.measure :as measure])
   (:use schadenfreude.util
         incanter.core
         incanter.charts
@@ -15,8 +17,12 @@
         [clojure.stacktrace :only [print-cause-trace]]))
 
 (def time-scale
-  "Recorded time / time-scale = time, in seconds."
+  "Recorded time (nanos) * time-scale = time, in seconds."
   1/1000000000)
+
+(def sample-interval
+  "How often to sample collected metrics, in seconds."
+  1/10)
 
 (defn divide-evenly
   "Divides an integer n into a vector of m roughly equal integers."
@@ -32,6 +38,7 @@
   "In a future, periodically displays a progressbar given a reference to a set
   of counters and a total."
   [counters total]
+  (assert (pos? total))
   (future
     (loop []
       (let [i (reduce (fn [sum c] (+ sum @c)) 0 counters)]
@@ -40,32 +47,39 @@
            :i i
            :total total})
         (when (< i total)
-          (Thread/sleep 1000)
+          (Thread/sleep 100)
           (recur))))
     (print "\n")))
 
+(defn measure-thread
+  "In a new thread, measures the given metric every dt seconds. Returns a delay
+  which, when dereferenced, stops the measurement thread and returns a sequence
+  of observations."
+  [dt metric]
+  (let [observations (atom [])
+        measurer     (measure/periodically dt
+                       (swap! observations conj (metrics/snapshot! metric)))]
+    (delay
+      (measurer)
+      (swap! observations conj (metrics/snapshot! metric))
+      @observations)))
+
 (defn record-thread
-  "Returns a pair of arrays of times and latencies for a run, single-threaded."
-  [run before-val counter]
-  (let [sample    (get run :sample 1)
-        n         (get run :n 1)
+  "Evaluates f repeatedly for a run, single-threaded, updating the given metric
+  with every latency measurement."
+  [run before-val counter metric]
+  (let [n         (get run :n 1)
         progress  (max 1 (int (/ n 100)))
-        f         (:f run)
-        times     (long-array (int (/ n sample)))
-        latencies (long-array (int (/ n sample)))]
+        f         (:f run)]
     (try
       (dotimes [i n]
-        (let [j (int (/ i sample))]
-          (aset-long times j (System/nanoTime))
-          (f before-val)
-          (aset-long latencies j (- (System/nanoTime) (aget times j))))
+        (measure/measure-latency metric
+          (f before-val))
 
         ; Update counter
         (when (zero? (mod i progress))
           (reset! counter (inc i))))
 
-      ; Return tape
-      [times latencies]
       (catch Throwable t
         (warn t)
         (throw t))
@@ -84,45 +98,61 @@
         n            (get run :n 1)
         counters     (vec (take thread-count (repeatedly #(atom 0))))
         progress     (progress-fut counters n)
-        tapes        (atom [])
+        metric       (metrics/rate+latency
+                       {:rate-scale    :seconds
+                        :latency-scale :milliseconds
+                        :quantiles     [0 0.5 0.95 0.99 0.999 1]})
+
+        ; Start measurement thread
+        measurer (measure-thread sample-interval metric)
+
         ; Start threads to run f
         workers (map-indexed
                   (fn [thread-id n]
-                    (Thread. #(let [tape (record-thread 
-                                           (assoc run :n n)
-                                           before-val
-                                           (counters thread-id))]
-                                (swap! tapes conj tape))
-                             "schadenfreude-record"))
+                    (future (record-thread
+                                (assoc run :n n)
+                                before-val
+                                (counters thread-id)
+                                metric)))
                   (divide-evenly n thread-count))]
+
     ; Run threads
-    (doseq [t workers] (.start t))
+    (dorun workers)
 
     ; Wait for threads
-    (while (some #(.isAlive %) workers)
-      (Thread/sleep 10))
+    (dorun (map deref workers))
 
-    ; Wait for progress thread
-    @progress
+    ; Get observations and kill measurement thread
+    (let [observations @measurer]
+      ; Finish up
+      (when-let [a (:after run)] (a before-val))
 
-    ; Finish up
-    (when-let [a (:after run)] (a before-val))
-   
-    ; Did any threads crash before completing?
-    (when (not= thread-count (count @tapes))
-      (throw (RuntimeException. "Some worker threads aborted abnormally!")))
+      ; Wait for progress thread
+      @progress
 
-    (let [times     (mapcat first @tapes)
-          latencies (mapcat second @tapes)
-          t0        (apply min times)]
-      ; Convert to dataset. Joins all tapes together, converts units to seconds,
-      ; normalizes times relative to start time.
-      (assoc run :record
-             (dataset [:time :latency]
-                      (map (fn [time latency]
-                             [(double (* time-scale (- time t0)))
-                              (double (* time-scale latency))])
-                           times latencies)))))) 
+      ; Convert to dataset. Joins all tapes together, converts units to
+      ; seconds, normalizes times relative to start time.
+      (let [t0        (apply min (map :time observations))]
+        (assoc run :record
+               (dataset [:time
+                         :throughput
+                         :latency-0
+                         :latency-0.5
+                         :latency-0.95
+                         :latency-0.99
+                         :latency-0.999
+                         :latency-1]
+                        (map (fn [o]
+                               (let [l (:latencies o)]
+                                 [(double (- (:time o) t0))
+                                  (double (:rate o))
+                                  (double (get l 0))
+                                  (double (get l 0.5))
+                                  (double (get l 0.95))
+                                  (double (get l 0.99))
+                                  (double (get l 0.999))
+                                  (double (get l 1))]))
+                             observations)))))))
 
 (defn record-suite
   "Records a suite of runs."
@@ -142,28 +172,6 @@
     ((:after suite) before-val)
     ; Return completed suite
     (assoc suite :runs recorded)))
-
-(defn throughput
-  "Computes a throughput dataset from a recorded run."
-  ([run] (throughput run {}))
-  ([run opts]
-   (assert run)
-   (let [ds        ($order :time :asc (:record run))
-         sample    (:sample run)
-         times     ($ :time ds)
-         _         (assert (< 1 (count times)))
-         t1        (first times)
-         t2        (last times)
-         bin-count (min (dec (count times)) 
-                          (max 1 (get opts :bins 100)))
-         bin-dt    (/ (- t2 t1) bin-count)
-         bin-times (range t1 t2 bin-dt)
-         bins      (partition-by #(quot % bin-dt) times)
-         points    (drop-last
-                     (map (fn [t bin] 
-                            [t (* sample (/ (count bin) bin-dt))])
-                          bin-times bins))]
-     (dataset [:time :throughput] points))))
 
 (defn transpose
   "Lazy transposition of a seq of seqs"
@@ -209,24 +217,28 @@
 
 (defn latency-plot
   "Takes a list of recorded runs and generates a timeseries chart comparing
-  their latencies."
-  [runs]
-  (log-plot
-    (reduce
-      (fn [plot run]
-        (add-points plot
-                    :time :latency
-                    :data         (:record run)
-                    :series-label (:name run)))
-
-      (scatter-plot :time :latency
-                    :data (:record (first runs))
-                    :title "Latency"
-                    :x-label "Time (s)"
-                    :y-label "Latency (s)"
-                    :legend (< 1 (count runs))
-                    :series-label (:name (first runs)))
-      (rest runs))))
+  their latencies. Latency is one of [0, 0.5, 0.95, 0.99, 0.999, 1]. Defaults
+  to median (0.5) latency."
+  ([runs] (latency-plot 0.5 runs))
+  ([latency runs]
+   (let [latency (keyword (str "latency-" latency))]
+     (log-plot
+       (reduce
+         (fn [plot run]
+           (add-lines plot
+                      :time
+                      latency
+                      :data         (:record run)
+                      :series-label (:name run)))
+         (xy-plot :time
+                  latency
+                  :data (:record (first runs))
+                  :title (str latency " latency")
+                  :x-label "Time (s)"
+                  :y-label "Latency (ms)"
+                  :legend (< 1 (count runs))
+                  :series-label (:name (first runs)))
+         (rest runs))))))
 
 (defn throughput-plot
   "Takes a list of recorded runs and generates a timeseries chart comparing
@@ -236,15 +248,16 @@
   (reduce
     (fn [plot run]
       (add-lines plot
-                  :time :throughput
-                  :data         (throughput run)
-                  :series-label (:name run)))
-
-    (xy-plot :time :throughput
-                  :data (throughput (first runs))
-                  :title "Throughput"
-                  :x-label "Time (s)"
-                  :y-label "Throughput (hz)"
-                  :legend (< 1 (count runs))
-                  :series-label (:name (first runs)))
+                 :time
+                 :throughput
+                 :data         (:record run)
+                 :series-label (:name run)))
+    (xy-plot :time
+             :throughput
+             :data          (:record (first runs))
+             :title         "Throughput"
+             :x-label       "Time (s)"
+             :y-label       "Throughput (hz)"
+             :legend        (< 1 (count runs))
+             :series-label  (:name (first runs)))
     (rest runs)))

@@ -6,5 +6,6 @@
   :main schadenfreude.demo
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [clojure-tools "1.1.2"]
-                 [incanter/incanter-core "1.4.1"]
-                 [incanter/incanter-charts "1.4.1"]])
+                 [interval-metrics "0.0.2"]
+                 [incanter/incanter-core "1.5.4"]
+                 [incanter/incanter-charts "1.5.4"]])
