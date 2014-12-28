@@ -227,7 +227,7 @@
   ([runs] (latency-plot 0.5 runs))
   ([latency runs]
    (let [latency (keyword (str "latency-" latency))]
-     (log-plot
+;     (log-plot
        (reduce
          (fn [plot run]
            (add-lines plot
@@ -243,7 +243,7 @@
                   :y-label "Latency (ms)"
                   :legend (< 1 (count runs))
                   :series-label (:name (first runs)))
-         (rest runs))))))
+         (rest runs)))))
 
 (defn throughput-plot
   "Takes a list of recorded runs and generates a timeseries chart comparing
