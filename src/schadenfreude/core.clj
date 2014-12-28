@@ -86,6 +86,11 @@
       (finally
         (reset! counter n)))))
 
+(defn doublen
+  "Converts x to a double when x is non-nil."
+  [x]
+  (when x (double x)))
+
 (defn record
   "Record executes a run and returns a [time, latency] dataset."
   [run]
@@ -146,12 +151,12 @@
                                (let [l (:latencies o)]
                                  [(double (- (:time o) t0))
                                   (double (:rate o))
-                                  (double (get l 0))
-                                  (double (get l 0.5))
-                                  (double (get l 0.95))
-                                  (double (get l 0.99))
-                                  (double (get l 0.999))
-                                  (double (get l 1))]))
+                                  (doublen (get l 0))
+                                  (doublen (get l 0.5))
+                                  (doublen (get l 0.95))
+                                  (doublen (get l 0.99))
+                                  (doublen (get l 0.999))
+                                  (doublen (get l 1))]))
                              observations)))))))
 
 (defn record-suite
