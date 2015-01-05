@@ -22,7 +22,7 @@
 
 (def sample-interval
   "How often to sample collected metrics, in seconds."
-  1/10)
+  1/1)
 
 (defn divide-evenly
   "Divides an integer n into a vector of m roughly equal integers."

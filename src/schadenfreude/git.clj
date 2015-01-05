@@ -140,9 +140,8 @@
                                               (str name " " version))))
                                    (:runs suite)))
                            recorded)]
-          (save (latency-plot runs)
-                (str name " latency.png")
-                :width 1024)
+          (doseq [l [0 0.5 0.95 0.99 0.999 1]]
+            (save (latency-plot l runs) (str name " latency " l) :width 1024))
           (save (throughput-plot runs)
                 (str name " throughput.png")
                 :width 1024))))))
